@@ -1,0 +1,168 @@
+# S5A3（DNF90 Go 服务端）的 Docker 编排
+#
+# 与 deploy/docker/manage.py 生成的 compose.json 等价，改成可读可手改的 YAML。
+# 配置、频道表和存档都来自 manage.py 的产物，这个文件只负责编排。
+#
+# ── 使用前提 ──────────────────────────────────────────────────────────
+# 1. 已经跑过一次 prepare（生成 server.env、database.env、配置和频道表）：
+#      python deploy\docker\manage.py prepare --pvf <客户端/Script.pvf> \
+#             --channel-info <118 频道完整外部 ETC> --host-ip <本机局域网 IP>
+# 2. 停掉旧的实例再起新的（两者占同样的端口和容器名）：
+#      docker compose -p servers5a3-local down
+#      docker compose up -d
+#
+# ── 频道表必须用外部完整 ETC ──────────────────────────────────────────
+# --channel-info 不能省。省了 prepare 会退回解析 PVF 内置表：目录能解出来、
+# 服务端也能启动，但客户端在频道阶段登录失败，而且报错完全不指向频道表，极难查。
+# 升级 PVF 时保留现有外部表，不要重新提取。
+#
+# 这个文件本身不提取任何频道表，只挂载 runtime/docker/data 里已经准备好的那份。
+# 检查当前实例用的是哪一份（external: 开头才对，出现 pvf: 就是踩坑了）：
+#   python -c "import json;print(json.load(open('runtime/docker/data/manifest.json'))['source'])"
+#
+# ── 镜像来源 ──────────────────────────────────────────────────────────
+# 默认 servers5a3-local:dev，即 manage.py build 出来的本地镜像，与当前实例一致。
+# 想跟 CI 构建的镜像走，起服务时覆盖：
+#   SERVER_IMAGE=ghcr.io/oyxp233/servers5a3:latest docker compose up -d
+#
+# ── 换 IP 时注意 ──────────────────────────────────────────────────────
+# HOST_IP 只决定"端口绑在哪个网卡"，真正的对外地址写在
+# runtime/docker/server.env 的 DNFBRIDGE_SERVER_IP 里，由 prepare --host-ip 生成。
+# 两者必须一致，否则客户端拿到的地址连不上。换 IP 要重新 prepare，不要只改这里。
+#
+# ── 游戏口为什么是 13 段范围 ──────────────────────────────────────────
+# 端口由频道表派生，在 10006~10508 之间成簇分布，簇与簇之间是空洞。
+# 按"间隔 ≤5 就并成一段"切，118 个端口压成 13 段，覆盖 122 个（多占 4 个），
+# 端口数量和启动开销与逐个列几乎没有区别。
+#
+# 为什么不干脆写一整段 10006-10508？实测（Windows Docker Desktop，同镜像）：
+#
+#     1 个端口      2.2 秒
+#     118 个端口    8.1 秒
+#     501 个端口   30.2 秒    ← 一整段，每次 up / 重启多等 22 秒
+#
+# 每个端口约 50ms，线性增长；com.docker.backend 还会为每个端口维护 4 条监听
+# 记录（IPv4/IPv6 双栈），503 个就是 2000 多条。而且会占住 385 个服务端根本
+# 不监听的端口，将来接网关前置（网关要绑这批端口）会直接冲突。
+#
+# 换频道表后端口会变，重新跑一次 prepare 再核对这段（manage.py 生成的
+# compose.json 里是精确清单）。整段写法留作应急：
+#   - "${HOST_IP:-192.168.1.91}:10006-10508:10006-10508"
+
+name: ${COMPOSE_PROJECT_NAME:-servers5a3-local}
+
+services:
+  db:
+    image: ${DATABASE_IMAGE:-docker.m.daocloud.io/library/mariadb:11.8@sha256:be1ef4fe5f14589325c08a41c76334097ce66c86264b75e1d28342c742782a61}
+    restart: unless-stopped
+    env_file:
+      - ./runtime/docker/database.env
+    volumes:
+      - database:/var/lib/mysql
+    command:
+      - --bind-address=10.253.90.3
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      # 只给本机 GM 工具用；数据库不对外
+      - "127.0.0.1:13306:3306"
+    networks:
+      private:
+        ipv4_address: 10.253.90.3
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+
+  # 启动前检查频道表来源。用 PVF 内置表能起服务但登录失败，报错又不指向原因，
+  # 所以这里直接拦住，不让它带病启动。
+  preflight:
+    image: ${SERVER_IMAGE:-servers5a3-local:dev}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        manifest=/runtime/data/dnf/manifest.json
+        [ -f "$$manifest" ] || { echo "缺少 $$manifest，先跑 manage.py prepare" >&2; exit 1; }
+        source=$$(grep -o '"source": *"[^"]*"' "$$manifest" | head -1)
+        echo "频道表来源: $$source"
+        case "$$source" in
+          *'"external:'*) echo "OK：外部完整 ETC" ;;
+          *) echo "拒绝启动：频道表来自 PVF 内置表，请带 --channel-info 重新 prepare" >&2; exit 1 ;;
+        esac
+    volumes:
+      - ./runtime/docker/data:/runtime/data/dnf:ro
+    # 只读一个文件，不需要网络；不指定的话 compose 会额外建一个 default 网络
+    network_mode: none
+    restart: "no"
+
+  server:
+    # 默认用 manage.py build 出来的本地镜像，和当前实例一致，不依赖网络。
+    # 想跟 CI 构建的镜像走：SERVER_IMAGE=ghcr.io/oyxp233/servers5a3:latest docker compose up -d
+    image: ${SERVER_IMAGE:-servers5a3-local:dev}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 45s
+    # 镜像内以 10001 运行；bind mount 的 ./runtime/docker/server 必须让它可写
+    user: "10001:10001"
+    env_file:
+      - ./runtime/docker/server.env
+    volumes:
+      - ./runtime/docker/server:/runtime
+      - ./runtime/docker/data:/runtime/data/dnf:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      preflight:
+        condition: service_completed_successfully
+    mem_limit: ${SERVER_MEMORY_LIMIT:-4g}
+    networks:
+      private:
+        ipv4_address: 10.253.90.2
+    ports:
+      # 频道引导 / 账号 API / 管理口：按 AGENTS.md 的约束留在回环，
+      # 只给本机的登录器和运维脚本用。
+      - "127.0.0.1:7001:7001"
+      - "127.0.0.1:17002:17002"
+      - "127.0.0.1:18111:18111"
+      # 游戏频道口：玩家实际连的就是这些
+      - "${HOST_IP:-192.168.1.91}:10006-10030:10006-10030"
+      - "${HOST_IP:-192.168.1.91}:10041-10060:10041-10060"
+      - "${HOST_IP:-192.168.1.91}:10091-10100:10091-10100"
+      - "${HOST_IP:-192.168.1.91}:10111-10121:10111-10121"
+      - "${HOST_IP:-192.168.1.91}:10141-10160:10141-10160"
+      - "${HOST_IP:-192.168.1.91}:10181-10183:10181-10183"
+      - "${HOST_IP:-192.168.1.91}:10201-10210:10201-10210"
+      - "${HOST_IP:-192.168.1.91}:10221-10223:10221-10223"
+      - "${HOST_IP:-192.168.1.91}:10231-10233:10231-10233"
+      - "${HOST_IP:-192.168.1.91}:10241-10243:10241-10243"
+      - "${HOST_IP:-192.168.1.91}:10251-10253:10251-10253"
+      - "${HOST_IP:-192.168.1.91}:10261-10263:10261-10263"
+      - "${HOST_IP:-192.168.1.91}:10501-10508:10501-10508"
+      # 组队 UDP 中继
+      - "${HOST_IP:-192.168.1.91}:30000-30063:30000-30063/udp"
+    healthcheck:
+      test: ["CMD", "wget", "-Y", "off", "-q", "-O", "/dev/null", "http://10.253.90.2:17002/api/status"]
+      start_period: 180s
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+
+networks:
+  private:
+    ipam:
+      config:
+        - subnet: 10.253.90.0/24
+
+volumes:
+  database:

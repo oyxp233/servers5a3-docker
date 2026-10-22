@@ -110,6 +110,26 @@ docker pull ghcr.io/oyxp233/servers5a3:latest
 `server_image`，然后照常 `prepare`、`up`。标签规则（`latest` / `sha-` / 日期 /
 版本号）、目录权限和镜像边界见[预构建镜像](Docs/DOCKER_IMAGE.md)。
 
+## 用 docker compose 跑
+
+根目录的 `docker-compose.yml` 是 `deploy/docker/manage.py` 生成编排的可读版本：配置、
+频道表和存档仍由 prepare 准备，这个文件只负责编排，方便手改端口和内存限制。
+
+```sh
+python deploy/docker/manage.py prepare --pvf <客户端/Script.pvf> \
+       --channel-info <118 频道完整外部 ETC> --host-ip <本机局域网 IP>
+docker compose up -d
+```
+
+三件事值得先知道：
+
+- **频道表必须用外部完整 ETC**。省略 `--channel-info` 会退回解析 PVF 内置表，服务
+  能起来但客户端登录失败，报错还不指向原因。编排里有个 preflight 服务专门拦这个，
+  来源不对直接拒绝启动。
+- **游戏口按频道表分段写成 13 段范围**，覆盖 118 个端口只多占 4 个。换频道表后端口
+  会变，需要重新核对；整段写法留在文件注释里应急。
+- **项目名沿用 `servers5a3-local`**，与 manage.py 生成的实例同名，切换时不丢存档。
+
 ## 开发与文档
 
 | 要做的事 | 入口 |

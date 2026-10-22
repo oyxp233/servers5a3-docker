@@ -1,3 +1,11 @@
+## 2026-10-22 — 根目录 docker-compose.yml
+
+- 新增 `docker-compose.yml`：`deploy/docker/manage.py` 生成编排的可读版本，MariaDB 与服务端两个服务，项目名沿用 `servers5a3-local`，替换时不丢存档。
+- 游戏口按频道表分段写成 13 段范围，覆盖 118 个端口、多占 4 个。整段 `10006-10508` 会展开成 503 个端口，实测每次启动多等 22 秒，未采用。
+- 新增 preflight 服务：`manifest.json` 的 `source` 不是 `external:` 时拒绝启动。用 PVF 内置表能起服务但登录失败，且报错不指向频道表。
+- 频道引导、账号 API、管理口按既有约束留在回环；游戏口与组队 UDP 中继绑配置的局域网地址。
+- 不改变服务端源码、游戏行为与运行配置。配置、频道表和存档仍由 prepare 生成，不随仓库分发。
+
 ## 2026-10-22 — 同步改走 GitHub 镜像与内置 token
 
 - 上游默认改为 `https://github.com/Cec1c/ServerS5A3.git`（GitGud 的 GitHub 镜像，两者内容同步）；仓库变量 `UPSTREAM_REPOSITORY` 可覆盖回 GitGud 或任意公开仓库，不配也能跑。
