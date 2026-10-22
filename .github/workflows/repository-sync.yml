@@ -41,7 +41,7 @@ jobs:
         run: |
           python3 scripts/ci/sync_repositories.py \
             --github "git@github.com:$GH_REPOSITORY.git" \
-            --upstream "$UPSTREAM" --apply
+            --upstream "$UPSTREAM" --merge --apply
       - name: Remove temporary identity
         if: always()
         run: rm -f "$RUNNER_TEMP/github-mirror-ssh/key"

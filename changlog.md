@@ -1,3 +1,11 @@
+## 2026-10-22 — 自动同步合并与镜像自动构建
+
+- 新增 `.github/workflows/docker-image.yml`：`master` 源码变化或推送 `v*` 标签时构建 `deploy/docker/Dockerfile`，推送到 `ghcr.io/oyxp233/servers5a3`，标签为 `latest`、`sha-<短SHA>`、`YYYYMMDD` 与语义版本；只出 `linux/amd64`，关闭 attestation 以兼容旧版客户端。
+- 同步脚本新增 `--merge`：上游领先时仍快进；镜像自带 CI 提交时改为合并上游并产生一个合并提交；合并冲突时两侧都不写入。原快进路径与既有回归不变，新增分叉合并、镜像领先不写、冲突停止三项。
+- `repository-sync.yml` 调用改为 `--merge`；要恢复纯快进删掉该参数即可。
+- 补充[预构建镜像](Docs/DOCKER_IMAGE.md)，`REPOSITORY_SYNC.md` 记录镜像自带 CI 的边界与主干保护要求。
+- 本地验证：`docker build` 通过，产物含 `DNF90Server`(62MB) 与 `DNF90Assets`(3.8MB)，以 uid 10001 运行；`test_sync_repositories` 14 项通过。本次不改变服务端源码、游戏行为与运行配置，不部署服务。
+
 ## 2026-10-22 — 部署首页频道表与活动提示
 
 - 将118频道外部表要求前移到README及部署指南开头，补齐Windows示例的显式`--channel-info`，强调读取实际加载的表并在PVF更新时保留。

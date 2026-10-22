@@ -1,0 +1,126 @@
+name: Docker image
+
+# 构建 deploy/docker/Dockerfile 并推送到 GitHub Container Registry。
+#
+# 触发点只有一个来源：master 上的源码变化。Repository sync 用 Deploy Key
+# 推送，会正常触发 push 事件；用内置 GITHUB_TOKEN 推送则不会，所以本工作流
+# 不依赖 GITHUB_TOKEN 发起的那条链路。
+#
+# 不在这里跑测试：verify.yml 已有完整验证，重复跑只会拖长构建时间。
+# 镜像本身只装 DNF90Server / DNF90Assets 两个静态二进制，配置由
+# deploy/docker/manage.py 挂载 ./server 与 ./data 提供。
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'go-server/**'
+      - 'deploy/docker/Dockerfile'
+      - '.github/workflows/docker-image.yml'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 想换镜像名只改这一行；owner 自动取仓库所属账号。
+  IMAGE_NAME: servers5a3
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve image reference
+        id: image
+        run: |
+          set -eu
+          # GHCR 要求仓库路径全小写，账号名可能带大写字母。
+          owner="$(printf '%s' "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          echo "ref=ghcr.io/${owner}/${{ env.IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ steps.image.outputs.ref }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short,prefix=sha-
+            type=raw,value={{date 'YYYYMMDD'}},enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.title=ServerS5A3
+            org.opencontainers.image.description=DNF90 Go game server
+            org.opencontainers.image.licenses=GPL-3.0-only
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # 关掉 attestation：部分旧版 Docker / 第三方面板拉 manifest list 时
+          # 会因多出来的 OCI attestation 条目报错，而这里不需要它。
+          provenance: false
+          sbom: false
+
+      - name: Publish summary
+        run: |
+          set -eu
+          {
+            echo "### 镜像已推送"
+            echo
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo
+            echo "digest: \`${{ steps.build.outputs.digest }}\`"
+            echo
+            echo "拉取：\`docker pull ${{ steps.image.outputs.ref }}:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write image reference
+        run: |
+          printf '%s\n' "${{ steps.meta.outputs.tags }}" > "$RUNNER_TEMP/image-tags.txt"
+          printf '%s\n' "${{ steps.build.outputs.digest }}" > "$RUNNER_TEMP/image-digest.txt"
+
+      - name: Keep image reference
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: docker-image-reference
+          path: |
+            ${{ runner.temp }}/image-tags.txt
+            ${{ runner.temp }}/image-digest.txt
+          if-no-files-found: error
+          retention-days: 14

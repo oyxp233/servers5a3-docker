@@ -98,6 +98,18 @@ sh build.sh linux amd64
 
 Windows 产物带 `.exe` 后缀。首次构建需要下载 Go 模块；已有依赖缓存时可离线构建。运行配置、数据库和资源的准备步骤见[部署说明](Docs/BUILD_AND_DEPLOY.md)。
 
+## 用现成镜像
+
+不想自己编译时，直接用 CI 构建好的镜像：
+
+```sh
+docker pull ghcr.io/oyxp233/servers5a3:latest
+```
+
+把它交给 `deploy/docker/manage.py` 的 `--image` 参数，或写进实例配置的
+`server_image`，然后照常 `prepare`、`up`。标签规则（`latest` / `sha-` / 日期 /
+版本号）、目录权限和镜像边界见[预构建镜像](Docs/DOCKER_IMAGE.md)。
+
 ## 开发与文档
 
 | 要做的事 | 入口 |
@@ -108,6 +120,7 @@ Windows 产物带 `.exe` 后缀。首次构建需要下载 Go 模块；已有依
 | 追踪客户端协议与函数 | [客户端函数索引](Docs/CLIENT_FUNCTION_INDEX.md) |
 | 研究任务和玩法问题 | [Seeker 工作流](Docs/SEEKER_WORKFLOW.md) · [调查与修复方案](Docs/seeker/README.md) |
 | 提交修复、了解镜像关系 | [仓库协作与同步](Docs/REPOSITORY_SYNC.md) |
+| 直接用现成容器镜像 | [预构建镜像](Docs/DOCKER_IMAGE.md) |
 | 查阅早期导入与验收记录 | [源码导入](Docs/SOURCE_IMPORT.md) · [D33 修复](Docs/D33_REPAIR_STATUS.md) · [验收交接](Docs/ACCEPTANCE_HANDOFF.md) |
 
 ```text

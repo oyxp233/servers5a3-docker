@@ -158,6 +158,55 @@ class RepositorySyncTests(unittest.TestCase):
         self.assertEqual(self.head(self.gh), github_tip)
         self.assertEqual(self.head(self.gg), upstream_tip)
 
+    def test_merge_keeps_mirror_commits_and_takes_upstream(self):
+        self.commit(".github/workflows/mirror.yml", "name: mirror ci")
+        self.run_git(self.work, "push", str(self.gh), "master")
+        mirror_tip = self.head(self.gh)
+        self.run_git(self.work, "reset", "--hard", self.base)
+        self.commit("source.txt", "gitgud")
+        self.run_git(self.work, "push", str(self.gg), "master")
+        upstream_tip = self.head(self.gg)
+
+        planned = synchronize(str(self.gh), str(self.gg), merge=True)
+        self.assertEqual(planned["direction"], "merge-upstream")
+        self.assertFalse(planned["applied"])
+        self.assertEqual(self.head(self.gh), mirror_tip)
+
+        result = synchronize(str(self.gh), str(self.gg), merge=True, apply=True)
+        self.assertEqual(result["direction"], "merge-upstream")
+        self.assertTrue(result["applied"])
+        merged = self.head(self.gh)
+        self.assertNotEqual(merged, mirror_tip)
+        # Both sides must be ancestors of the merge commit: upstream work is
+        # taken and the mirror's own CI definitions survive.
+        self.run_git(self.gh, "merge-base", "--is-ancestor", upstream_tip, merged)
+        self.run_git(self.gh, "merge-base", "--is-ancestor", mirror_tip, merged)
+        self.assertEqual(self.run_git(self.gh, "show", f"{merged}:.github/workflows/mirror.yml"), "name: mirror ci")
+        self.assertEqual(self.run_git(self.gh, "show", f"{merged}:source.txt"), "gitgud")
+
+    def test_merge_treats_mirror_ahead_as_noop(self):
+        self.commit("mirror-only.txt", "mirror")
+        self.run_git(self.work, "push", str(self.gh), "master")
+        mirror_tip = self.head(self.gh)
+        result = synchronize(str(self.gh), str(self.gg), merge=True, apply=True)
+        self.assertEqual(result["direction"], "github-ahead")
+        self.assertFalse(result["applied"])
+        self.assertEqual(self.head(self.gh), mirror_tip)
+        self.assertEqual(self.head(self.gg), self.base)
+
+    def test_merge_conflict_stops_without_writing(self):
+        self.commit("shared.txt", "mirror side")
+        self.run_git(self.work, "push", str(self.gh), "master")
+        mirror_tip = self.head(self.gh)
+        self.run_git(self.work, "reset", "--hard", self.base)
+        self.commit("shared.txt", "upstream side")
+        self.run_git(self.work, "push", str(self.gg), "master")
+        upstream_tip = self.head(self.gg)
+        with self.assertRaisesRegex(SyncError, "Merge conflict"):
+            synchronize(str(self.gh), str(self.gg), merge=True, apply=True)
+        self.assertEqual(self.head(self.gh), mirror_tip)
+        self.assertEqual(self.head(self.gg), upstream_tip)
+
     def test_missing_branch_does_not_create_it(self):
         with self.assertRaises(SyncError):
             synchronize(str(self.gh), str(self.gg), branch="missing", apply=True)
