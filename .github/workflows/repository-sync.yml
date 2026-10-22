@@ -34,7 +34,7 @@ jobs:
           printf '%s\n' "$SYNC_HOSTS" > "$RUNNER_TEMP/github-mirror-ssh/known_hosts"
           chmod 600 "$RUNNER_TEMP/github-mirror-ssh/key"
           echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/github-mirror-ssh/key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/github-mirror-ssh/known_hosts" >> "$GITHUB_ENV"
-      - name: Fast-forward GitHub to authoritative GitGud master
+      - name: Mirror authoritative GitGud master
         env:
           GH_REPOSITORY: ${{ github.repository }}
           UPSTREAM: ${{ vars.GITGUD_UPSTREAM_REPOSITORY }}
