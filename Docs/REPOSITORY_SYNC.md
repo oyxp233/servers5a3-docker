@@ -15,11 +15,14 @@ CI 与同步脚本的变更同样在上游 MR 审查，合并后正常镜像。�
 
 ## GitHub 配置
 
-- 变量 GITGUD_UPSTREAM_REPOSITORY：唯一上游的公开 HTTPS Git URL，例如 https://gitgud.io/OWNER/PROJECT.git；未设置时禁用镜像。
-- 在目标 GitHub 仓库创建专用、允许写入的 Deploy Key。私钥存入仓库 secret SOURCE_MIRROR_SSH_KEY，已核实的 github.com 主机密钥存入 SOURCE_MIRROR_KNOWN_HOSTS。该身份只写本 GitHub 镜像，不使用个人长期访问令牌或 GitGud 写入凭据。
-- Actions 默认 token 仅 contents: read。主干保护需允许专用镜像身份推送——快进与合并提交都要放行，只允许快进会让带 CI 提交的镜像同步失败；不要在 GitHub 主干直接开发或合并 PR。
-- Repository sync 每小时第7分钟计划运行（`7 * * * *`），保留手动触发；调度可能延迟。镜像推送不再触发额外检查，相同SHA无写入。
-- 旧 Upstream updates 工作流及其合并脚本已移除。迁移完成后停用旧工作流，移除旧 GITGUD_SYNC_REPOSITORY、UPSTREAM_SYNC_ONLY 变量和 GitGud fork 同步 secrets，避免双向写入重新启用。
+本仓库的同步不需要任何密钥，开箱即用：
+
+- 上游默认是 GitHub 镜像 `https://github.com/Cec1c/ServerS5A3.git`。要换回 GitGud 原始上游或别的公开仓库，配仓库变量 `UPSTREAM_REPOSITORY` 覆盖即可；不配就用默认值。
+- 认证只用内置 `GITHUB_TOKEN`：fetch 上游是匿名 HTTPS，push 本仓库用 token 的 extraheader。**不需要 Deploy Key，不需要 SSH Secret**。
+- 工作流声明 `contents: write`（推主干）和 `actions: write`（触发镜像构建）。主干若开了保护规则，要允许 `GITHUB_TOKEN` 推送——快进与合并提交都要放行，只允许快进会让带 CI 提交的镜像同步失败。
+- Repository sync 每小时第 7 分钟计划运行（`7 * * * *`），保留手动触发；调度可能延迟。相同 SHA 不写入。
+- **`GITHUB_TOKEN` 推送不会触发 `push` 事件**，所以同步工作流在 `applied=true` 时会显式调用 `gh workflow run docker-image.yml`。少了这一步，同步进来的上游更新不会出镜像。
+- 早期版本的 `GITGUD_UPSTREAM_REPOSITORY` 变量、`SOURCE_MIRROR_SSH_KEY` / `SOURCE_MIRROR_KNOWN_HOSTS` 密钥已不再使用，可以删除。
 
 | 主干关系 | 动作 |
 | --- | --- |
@@ -39,7 +42,11 @@ CI 与同步脚本的变更同样在上游 MR 审查，合并后正常镜像。�
 | 文件 | 作用 |
 | --- | --- |
 | `.github/workflows/docker-image.yml` | 源码变化时构建并推送 `ghcr.io` 镜像 |
-| `.github/workflows/repository-sync.yml` | 每小时同步，调用 `--merge` |
+| `.github/workflows/repository-sync.yml` | 每小时把上游并进 master，必要时触发镜像构建 |
+
+同步源默认取 GitHub 镜像 `Cec1c/ServerS5A3` 而不是 GitGud 原始上游：两者内容同步，
+而 GitHub 仓库可以直接匿名 HTTPS 拉取，省掉 Deploy Key 与主机密钥。GitGud 仍是
+源码权威，这里只是换了一个更省事的读取入口。
 
 这偏离了"不产生镜像合并提交"的原始约定，是有意选择：镜像要能自动出镜像，就必须
 有一份上游不存在的 workflow 文件，而任何 GitHub 独有的提交都会让纯快进同步失败。

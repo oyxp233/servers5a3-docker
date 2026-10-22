@@ -1,3 +1,11 @@
+## 2026-10-22 — 同步改走 GitHub 镜像与内置 token
+
+- 上游默认改为 `https://github.com/Cec1c/ServerS5A3.git`（GitGud 的 GitHub 镜像，两者内容同步）；仓库变量 `UPSTREAM_REPOSITORY` 可覆盖回 GitGud 或任意公开仓库，不配也能跑。
+- 认证全部改用内置 `GITHUB_TOKEN`：fetch 匿名 HTTPS，push 用 token extraheader。去掉 Deploy Key 与 `SOURCE_MIRROR_*` 密钥依赖，旧变量 `GITGUD_UPSTREAM_REPOSITORY` 不再使用。
+- `GITHUB_TOKEN` 推送不触发 `push` 事件，因此同步工作流在 `applied=true` 时显式执行 `gh workflow run docker-image.yml`；漏掉这步上游更新不会出镜像。
+- 新增上游连通性自检步骤。同步脚本为防凭据泄露会吞掉 git 原始报错，日志里只剩 `git fetch failed`，自检把地址错误和网络问题直接暴露出来。
+- 首次手动运行失败（exit 1）出现在旧版 SSH 认证路径上；改用 token 后该路径不再存在。本次不改变服务端源码与运行配置，不部署服务。
+
 ## 2026-10-22 — 自动同步合并与镜像自动构建
 
 - 新增 `.github/workflows/docker-image.yml`：`master` 源码变化或推送 `v*` 标签时构建 `deploy/docker/Dockerfile`，推送到 `ghcr.io/oyxp233/servers5a3`，标签为 `latest`、`sha-<短SHA>`、`YYYYMMDD` 与语义版本；只出 `linux/amd64`，关闭 attestation 以兼容旧版客户端。

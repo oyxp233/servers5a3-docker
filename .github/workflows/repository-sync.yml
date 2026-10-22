@@ -1,47 +1,74 @@
 name: Repository sync
 
+# 把上游 master 并进本仓库，然后触发镜像构建。
+#
+# 上游默认是 GitHub 上的镜像 Cec1c/ServerS5A3，用仓库变量 UPSTREAM_REPOSITORY
+# 可以覆盖成任何公开仓库（包括 GitGud 原始上游）。
+#
+# 认证全部走内置 GITHUB_TOKEN，不需要 Deploy Key、不需要 SSH Secret：
+# fetch 上游是匿名 HTTPS，push 本仓库用 token 的 extraheader。
+#
+# GITHUB_TOKEN 推送不会触发 push 事件，所以镜像构建必须在这里显式触发，
+# 否则同步进来的上游更新不会出镜像。
+
 on:
   schedule:
     - cron: '7 * * * *'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+  actions: write
 
 concurrency:
   group: repository-sync-master
   cancel-in-progress: false
 
+env:
+  UPSTREAM: ${{ vars.UPSTREAM_REPOSITORY || 'https://github.com/Cec1c/ServerS5A3.git' }}
+
 jobs:
   synchronize:
-    if: vars.GITGUD_UPSTREAM_REPOSITORY != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Prepare GitHub mirror-only SSH identity
-        env:
-          SYNC_KEY: ${{ secrets.SOURCE_MIRROR_SSH_KEY }}
-          SYNC_HOSTS: ${{ secrets.SOURCE_MIRROR_KNOWN_HOSTS }}
+
+      - name: Check upstream reachability
         run: |
-          set -eu
-          test -n "$SYNC_KEY"
-          test -n "$SYNC_HOSTS"
-          install -d -m 700 "$RUNNER_TEMP/github-mirror-ssh"
-          printf '%s\n' "$SYNC_KEY" > "$RUNNER_TEMP/github-mirror-ssh/key"
-          printf '%s\n' "$SYNC_HOSTS" > "$RUNNER_TEMP/github-mirror-ssh/known_hosts"
-          chmod 600 "$RUNNER_TEMP/github-mirror-ssh/key"
-          echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/github-mirror-ssh/key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/github-mirror-ssh/known_hosts" >> "$GITHUB_ENV"
-      - name: Mirror authoritative GitGud master
+          set -euo pipefail
+          echo "upstream = $UPSTREAM"
+          # 同步脚本为防凭据泄露会吞掉 git 的原始报错，只剩 "git fetch failed"。
+          # 这里先单独探一次，网络或地址有问题会直接显示原因。
+          git ls-remote --heads "$UPSTREAM" | head -5
+
+      - name: Mirror upstream into master
         env:
-          GH_REPOSITORY: ${{ github.repository }}
-          UPSTREAM: ${{ vars.GITGUD_UPSTREAM_REPOSITORY }}
+          GH_SYNC_TOKEN: ${{ github.token }}
+          MIRROR_URL: https://github.com/${{ github.repository }}.git
+          SYNC_JSON: ${{ runner.temp }}/sync.json
         run: |
+          set -euo pipefail
+          echo "upstream = $UPSTREAM"
           python3 scripts/ci/sync_repositories.py \
-            --github "git@github.com:$GH_REPOSITORY.git" \
-            --upstream "$UPSTREAM" --merge --apply
-      - name: Remove temporary identity
-        if: always()
-        run: rm -f "$RUNNER_TEMP/github-mirror-ssh/key"
+            --github "$MIRROR_URL" --upstream "$UPSTREAM" --merge --apply | tee "$SYNC_JSON"
+
+      - name: Read synchronization result
+        id: result
+        env:
+          SYNC_JSON: ${{ runner.temp }}/sync.json
+        run: |
+          set -euo pipefail
+          echo "direction=$(jq -r .direction "$SYNC_JSON")" >> "$GITHUB_OUTPUT"
+          echo "applied=$(jq -r .applied "$SYNC_JSON")" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger image build
+        if: steps.result.outputs.applied == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run docker-image.yml --repo "${{ github.repository }}" --ref master
+          echo "master 已更新（${{ steps.result.outputs.direction }}），已触发 Docker image 构建"
